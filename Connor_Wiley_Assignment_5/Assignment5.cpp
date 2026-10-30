@@ -8,8 +8,9 @@
  * Each file has to have a 9x9 Sudoku puzzle.
  * Outputs: The filename, original puzzle, and every solution found.
  * Author: Meklit Zewdie
- * Collaborators: ChatGPT and Gemini
+ * Collaborators: ChatGPT and Gemini, Connor Wiley, Claude Anthropic
  * Creation Date: October 15, 2026
+ * Revised by: Connor Wiley, Claude Anthropic, October 29, 2026
  */
 
 #include <iostream>
@@ -21,11 +22,17 @@ class SudokuSolver
 {
 private:
     //A Sudoku board should have nine rows and nine columns
+    // Space complexity: the whole puzzle is only 81 ints, so memory stays fixed no matter how hard it is.
+    // Maintainability: the board size 9 is a magic number here and should be a named constant.
     int board[9][9];
 
     //This counts the number of solutions found for the puzzle.
+    // Space complexity: a single counter tracks the number of solutions found.
     int solutionCount;
+    // Space complexity: one file stream is reused for the current puzzles output.
+    ofstream solutionFile;
     //This checks if a number can be placed in a cell.
+    // Execution time: every check rescans about 27 cells, where bitmasks would make it constant time.
     bool isValid(int row, int col, int number)
     {
         //Checking the cell's row.
@@ -47,6 +54,7 @@ private:
         }
 
         //Find the top-left corner of the cell's 3x3 block.
+        // Maintainability: the block size 3 is a magic number and should be a named constant.
         int blockRow = (row / 3) * 3;
         int blockCol = (col / 3) * 3;
 
@@ -97,17 +105,29 @@ private:
         return true;
     }
 
-    //Prints the current Sudoku board.
-    void printBoard()
+    //Prints the current Sudoku board to the given stream (console or file).
+    //Empty cells are printed as '_' to match the puzzle file format.
+    void printBoard(ostream& out)
     {
         for (int row = 0; row < 9; row++)
         {
             for (int col = 0; col < 9; col++)
             {
-                cout << board[row][col] << " ";
-            }
+                if (board[row][col] == 0)
+                {
+                    out << '_';
+                }
+                else
+                {
+                    out << board[row][col];
+                }
 
-            cout << endl;
+                if (col < 8)
+                {
+                    out << " ";
+                }
+            }
+            out << endl; // Execution time: each endl forces a flush, which slows output when there are many solutions.
         }
     }
 
@@ -119,6 +139,8 @@ private:
         bool foundEmpty = false;
 
         //This d=find the first empty cell by scanning
+        // Execution time: the scan restarts at cell (0,0) every call, wasting work that remembering the last position avoids.
+        // Execution time: filling the first empty cell ignores that the most constrained cell would prune the search far more.
         for (int row = 0; row < 9 && !foundEmpty; row++)
         {
             for (int col = 0; col < 9; col++)
@@ -139,21 +161,32 @@ private:
             solutionCount++;
 
             cout << "\nSolution " << solutionCount << ":\n";
-            printBoard();
+            printBoard(cout);
+
+            // Space complexity: solutions are written out immediately, so memory stays constant even with thousands of them.
+            // Maintainability: printing and file writing inside the search make it harder to reuse or modify either.
+            
+            printBoard(solutionFile);
+            solutionFile << endl;
             return;
         }
 
         // Try every possible digit in the empty cell.
+        // Execution time: each call tries up to nine digits, so the worst case grows exponentially with the empty cells.
+        // Correctness: there is no cap on the number of solutions, so a nearly empty puzzle runs essentially forever.
         for (int number = 1; number <= 9; number++)
         {
             if (isValid(emptyRow, emptyCol, number))
             {
+                // Space complexity: setting and undoing one cell means the board is never copied.
                 // Make a choice.
                 board[emptyRow][emptyCol] = number;
-
+                
+                // Space complexity: this is the only recursive call, so the stack is never deeper than 81 frames.
                 // Recursively solve the remaining empty cells.
                 solveRecursive();
 
+                // Correctness: undoing each choice lets the search keep going and find every solution, not just the first.
                 // Backtrack: undo the choice so another number
                 // can be tried and all solutions can be found.
                 board[emptyRow][emptyCol] = 0;
@@ -175,6 +208,8 @@ public:
         }
     }
     //Reads and validates a puzzle file.
+    // Maintainability: one function handling opening, reading, parsing, and six error checks is harder to test and change.
+    // Correctness: every false return below exits before solve runs, so no solutionN.txt is created for a malformed file.
     bool loadPuzzle(const string& filename)
     {
         ifstream inputFile(filename);
@@ -276,35 +311,57 @@ public:
             return false;
         }
 
+        // Revised: the conflicting-clue check moved into solve() so that a
+        // puzzle with contradictory clues still gets a "No solution found."
+        // line in its solutionN.txt file.
+
         return true;
     }
 
     //This part displays the puzzle and finds all its solutions.
-    void solve(const string& filename)
+    void solve(const string& filename, const string& solutionFilename)
     {
         cout << "\n====================================\n";
         cout << "File: " << filename << endl;
         cout << "====================================\n";
         cout << "Original puzzle:\n";
-        printBoard();
+        printBoard(cout);
 
         solutionCount = 0;
-        solveRecursive();
+
+        solutionFile.open(solutionFilename);
+        
+        if (!solutionFile.is_open())
+        {
+            cout << "Error: Could not create " << solutionFilename << ".\n";
+            return;
+        }
+
+        // Puzzles whose original clues already conflict have no solution.
+        // Correctness: conflicting clues skip the search, and an empty result still writes No solution found to the file.
+        if (hasValidStartingClues())
+        {
+            solveRecursive();
+        }
 
         if (solutionCount == 0)
         {
             cout << "\nNo solution found.\n";
+            solutionFile << "No solution found." << endl;
         }
         else
         {
-            cout << "\nTotal solutions found: "
+            cout << "\nSolutions found: "
                  << solutionCount << endl;
+            solutionFile << "Solutions found: " << solutionCount << endl;
         }
+        solutionFile.close();
     }
 };
 
 int main()
 {
+    // Maintainability: hard-coded filenames mean adding a sixth puzzle requires editing the code.
     string filenames[5] =
     {
         "puzzle1.txt",
@@ -321,7 +378,8 @@ int main()
 
         if (solver.loadPuzzle(filenames[i]))
         {
-            solver.solve(filenames[i]);
+            // Revised: solution file is named solutionN.txt, N = puzzle number.
+            solver.solve(filenames[i], "solution" + to_string(i + 1) + ".txt");
         }
     }
 
